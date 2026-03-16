@@ -206,41 +206,43 @@ const getBirthdayReport = async (req, res) => {
     let currentDay = today.getDate();
     let targetMonth = month ? parseInt(month) : currentMonth;
 
-    // Helper to convert string "01/02/2003" to a date for comparison
-    const dateConvert = {
-      $dateFromString: {
-        dateString: "$dob",
-        format: "%d/%m/%Y"
-      }
+    // Build the initial match filter
+    let initialMatch = {
+      dob: { $ne: null, $exists: true, $nin: ["", "null", "undefined"] }
     };
 
-    let matchStage = {};
-
-    // Birthday Logic
-    if (mode === 'today') {
-      matchStage = {
-        $expr: {
-          $and: [
-            { $eq: [{ $month: dateConvert }, currentMonth] },
-            { $eq: [{ $dayOfMonth: dateConvert }, currentDay] }
-          ]
-        }
-      };
-    } else {
-      matchStage = {
-        $expr: {
-          $eq: [{ $month: dateConvert }, targetMonth]
-        }
-      };
-    }
-
-    // Booth Logic: Match the booth number anywhere in the "part" string
     if (booth && booth !== "All") {
-      matchStage.part = { $regex: booth, $options: 'i' };
+      initialMatch.part = { $regex: booth, $options: 'i' };
     }
 
     const voters = await Voter.aggregate([
-      { $match: matchStage },
+      { $match: initialMatch }, // Stage 1: Filter out empty/invalid DOBs and filter by booth
+      {
+        $addFields: {
+          // Stage 2: Safely convert string to date
+          dateObj: {
+            $dateFromString: {
+              dateString: "$dob",
+              format: "%d/%m/%Y",
+              onError: null, // If parsing fails, return null instead of crashing
+              onNull: null
+            }
+          }
+        }
+      },
+      {
+        $match: {
+          dateObj: { $ne: null }, // Filter out any that failed parsing
+          $expr: (mode === 'today') 
+            ? {
+                $and: [
+                  { $eq: [{ $month: "$dateObj" }, currentMonth] },
+                  { $eq: [{ $dayOfMonth: "$dateObj" }, currentDay] }
+                ]
+              }
+            : { $eq: [{ $month: "$dateObj" }, targetMonth] }
+        }
+      },
       { $project: { name: 1, epic_id: 1, dob: 1, mobile: 1, part: 1 } },
       { $sort: { name: 1 } }
     ]);
